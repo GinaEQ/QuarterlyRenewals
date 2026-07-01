@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Renewals & Commission Dashboard</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f9f9f9; color: #111; font-size: 20px; }
+  :root {
+    --color-text-primary: #111;
+    --color-text-secondary: #666;
+    --color-text-tertiary: #aaa;
+    --color-text-success: #1D9E75;
+    --color-text-danger: #D85A30;
+    --color-background-primary: #fff;
+    --color-background-secondary: #f3f3f3;
+    --color-border-secondary: #ddd;
+    --color-border-tertiary: #eee;
+    --border-radius-md: 8px;
+    --border-radius-lg: 12px;
+    --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  #root { max-width: 1200px; margin: 0 auto; padding: 2rem 1.5rem; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+// ─── PASTE YOUR APPS SCRIPT WEB APP URL HERE ───────────────────────────────
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwbAhAUCyfQdSuy4tsFoQPp6MAYv-Llz0FiORYkctjhdeaOl_y0-bJmaiRID0O6XwbB/exec";
+// ───────────────────────────────────────────────────────────────────────────
+
+const COMMISSION_RATE = 0.05;
+const QTR_COLORS = ["#7F77DD","#1D9E75","#D85A30","#378ADD","#BA7517","#639922"];
+
+function isKaiser(carrier) {
+  return (carrier || "").toLowerCase().includes("kaiser");
+}
+
+function getGroupPremium(g, filter) {
+  const c1 = (g["Medical Carrier"] || "").trim();
+  const c2 = (g["2nd Medical Carrier"] || "").trim();
+  const m1 = parseFloat(g["Medical $"]) || 0;
+  const m2 = parseFloat(g["2nd Medical $"]) || 0;
+  if (filter === "kaiser") return (isKaiser(c1) ? m1 : 0) + (isKaiser(c2) ? m2 : 0);
+  if (filter === "nonkaiser") return (!isKaiser(c1) ? m1 : 0) + (!isKaiser(c2) ? m2 : 0);
+  return m1 + m2;
+}
+
+function getRenewalPremium(g, filter) {
+  const c1 = (g["Medical Carrier"] || "").trim();
+  const c2 = (g["2nd Medical Carrier"] || "").trim();
+  const m1 = parseFloat(g["Medical $"]) || 0;
+  const m2 = parseFloat(g["2nd Medical $"]) || 0;
+  if (filter === "kaiser") {
+    if (isKaiser(c1) && m1 !== 0) return m1;
+    if (isKaiser(c2) && m2 !== 0) return m2;
+    return null;
+  }
+  if (filter === "nonkaiser") {
+    if (!isKaiser(c1) && m1 !== 0) return m1;
+    if (!isKaiser(c2) && m2 !== 0) return m2;
+    return null;
+  }
+  return Math.max(m1, m2) || null;
+}
+
+function getLowestRenewalPremium(g, filter) {
+  const c1 = (g["Medical Carrier"] || "").trim();
+  const c2 = (g["2nd Medical Carrier"] || "").trim();
+  const m1 = parseFloat(g["Medical $"]) || 0;
+  const m2 = parseFloat(g["2nd Medical $"]) || 0;
+  if (filter === "kaiser") {
+    if (isKaiser(c1) && m1 !== 0) return m1;
+    if (isKaiser(c2) && m2 !== 0) return m2;
+    return null;
+  }
+  if (filter === "nonkaiser") {
+    if (!isKaiser(c1) && m1 !== 0) return m1;
+    if (!isKaiser(c2) && m2 !== 0) return m2;
+    return null;
+  }
+  if (m1 !== 0 && m2 !== 0) return Math.min(m1, m2);
+  if (m1 !== 0) return m1;
+  if (m2 !== 0) return m2;
+  return null;
+}
+
+function parsePct(val) {
+  const n = parseFloat(val) || 0;
+  return Math.abs(n) < 2 ? n * 100 : n;
+}
+
+function getGroupPct(g, filter, mode) {
+  const c1 = (g["Medical Carrier"] || "").trim();
+  const c2 = (g["2nd Medical Carrier"] || "").trim();
+  const p1 = parsePct(g["Medical %"]);
+  const p2 = parsePct(g["2nd Medical %"]);
+  const m1 = parseFloat(g["Medical $"]) || 0;
+  const m2 = parseFloat(g["2nd Medical $"]) || 0;
+  if (filter === "kaiser") {
+    if (isKaiser(c1) && m1 !== 0) return p1;
+    if (isKaiser(c2) && m2 !== 0) return p2;
+    return 0;
+  }
+  if (filter === "nonkaiser") {
+    if (!isKaiser(c1) && m1 !== 0) return p1;
+    if (!isKaiser(c2) && m2 !== 0) return p2;
+    return 0;
+  }
+  if (m1 !== 0 && m2 !== 0) return mode === "lowest" ? Math.min(p1, p2) : Math.max(p1, p2);
+  if (m1 !== 0) return p1;
+  if (m2 !== 0) return p2;
+  return 0;
+}
+
+function fmt$(n) { return "$" + Math.round(n).toLocaleString(); }
+function fmtShort(n) {
+  if (n >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e3) return "$" + (n / 1e3).toFixed(1) + "K";
+  return "$" + Math.round(n);
+}
+function fmtDate(val) {
+  if (!val) return "—";
+  const d = val instanceof Date ? val : new Date(val);
+  if (isNaN(d.getTime())) return String(val);
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  return `${mm}/${dd}/${yyyy}`;
+}
+
+function parseWorkbook(buf) {
+  const wb = XLSX.read(buf, { type: "array" });
+  return wb.SheetNames.map(name => {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: "" });
+    const groups = rows.filter(r => {
+      const m1 = parseFloat(r["Medical $"]) || 0;
+      const m2 = parseFloat(r["2nd Medical $"]) || 0;
+      const c1 = (r["Medical Carrier"] || "").trim();
+      const c2 = (r["2nd Medical Carrier"] || "").trim();
+      return m1 !== 0 || m2 !== 0 || c1 !== "" || c2 !== "";
+    });
+    const totalEmployees = groups.reduce((s, r) => s + (parseFloat(r["Medical Employee Count"]) || 0), 0);
+    return { label: name, groups, totalEmployees };
+  });
+}
+
+function parseAppsScriptData(data) {
+  return data.map(sheet => {
+    const headers = sheet.headers;
+    const rows = sheet.rows.map(row => {
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = row[i] ?? ""; });
+      return obj;
+    });
+    const groups = rows.filter(r => {
+      const m1 = parseFloat(r["Medical $"]) || 0;
+      const m2 = parseFloat(r["2nd Medical $"]) || 0;
+      const c1 = (r["Medical Carrier"] || "").trim();
+      const c2 = (r["2nd Medical Carrier"] || "").trim();
+      return m1 !== 0 || m2 !== 0 || c1 !== "" || c2 !== "";
+    });
+    const totalEmployees = groups.reduce((s, r) => s + (parseFloat(r["Medical Employee Count"]) || 0), 0);
+    return { label: sheet.name, groups, totalEmployees };
+  });
+}
+
+function BarChart({ data, color }) {
+  const max = Math.max(...data.map(d => d.value), 1);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {data.map((d, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+          <div style={{ width: 130, textAlign: "right", color: "var(--color-text-secondary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flexShrink: 0 }}>{d.label}</div>
+          <div style={{ flex: 1, background: "var(--color-background-secondary)", borderRadius: 3, height: 18 }}>
+            <div style={{ width: `${(d.value / max) * 100}%`, background: color, borderRadius: 3, height: "100%", minWidth: 2 }} />
+          </div>
+          <div style={{ width: 80, color: "var(--color-text-primary)", fontWeight: 500, fontSize: 12 }}>{fmtShort(d.value)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Toggle({ value, onChange }) {
+  const opts = [{ key: "all", label: "All" }, { key: "kaiser", label: "Kaiser" }, { key: "nonkaiser", label: "Non-Kaiser" }];
+  return (
+    <div style={{ display: "flex", border: "1px solid #ddd", borderRadius: 8, overflow: "hidden" }}>
+      {opts.map((o, i) => (
+        <button key={o.key} onClick={() => onChange(o.key)} style={{
+          padding: "6px 16px", background: value === o.key ? "#7F77DD" : "#fff",
+          color: value === o.key ? "#fff" : "#666",
+          border: "none", borderLeft: i > 0 ? "1px solid #ddd" : "none",
+          cursor: "pointer", fontWeight: 700, fontSize: 14
+        }}>{o.label}</button>
+      ))}
+    </div>
+  );
+}
+
+function KPICard({ label, value, small, premium, pct, sub }) {
+  return (
+    <div style={{ background: "#fff", border: "1px solid #eee", borderRadius: 10, padding: "0.85rem 1rem" }}>
+      <div style={{ fontSize: 12, color: "#666", marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: small ? 14 : 20, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</div>
+      {premium != null && <div style={{ fontSize: 13, marginTop: 2, fontWeight: 500 }}>{fmt$(premium)}</div>}
+      {pct != null && pct !== 0 && (
+        <div style={{ fontSize: 12, marginTop: 1, fontWeight: 500, color: pct > 0 ? "#1D9E75" : "#D85A30" }}>
+          {(pct > 0 ? "+" : "") + pct.toFixed(1) + "%"}
+        </div>
+      )}
+      {sub && <div style={{ fontSize: 12, marginTop: 2, color: "#666" }}>{sub}</div>}
+    </div>
+  );
+}
+
+function App() {
+  const [quarters, setQuarters] = useState([]);
+  const [activeQ, setActiveQ] = useState(null);
+  const [premiumFilter, setPremiumFilter] = useState("all");
+  const [dragging, setDragging] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const fileRef = useRef();
+
+  useEffect(() => {
+    if (APPS_SCRIPT_URL) {
+      fetchFromAppsScript();
+    } else {
+      try {
+        const saved = localStorage.getItem("renewals_quarters");
+        if (saved) {
+          const qtrs = JSON.parse(saved);
+          if (qtrs.length > 0) { setQuarters(qtrs); setActiveQ(qtrs[0].label); }
+        }
+      } catch(e) {}
+    }
+  }, []);
+
+  async function fetchFromAppsScript() {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(APPS_SCRIPT_URL);
+      const data = await res.json();
+      const qtrs = parseAppsScriptData(data);
+      setQuarters(qtrs);
+      setActiveQ(qtrs[0]?.label || null);
+    } catch(e) {
+      setError("Could not load from Google Sheets. Upload a file manually below.");
+    }
+    setLoading(false);
+  }
+
+  function handleFile(file) {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const qtrs = parseWorkbook(new Uint8Array(e.target.result));
+        if (!qtrs.length) { alert("No sheets found."); return; }
+        setQuarters(qtrs);
+        setActiveQ(qtrs[0].label);
+        try { localStorage.setItem("renewals_quarters", JSON.stringify(qtrs)); } catch(err) {}
+      } catch(err) { alert("Could not parse file: " + err.message); }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  const current = quarters.find(q => q.label === activeQ) || quarters[0];
+
+  function qPremium(q) { return q.groups.reduce((s, g) => s + getGroupPremium(g, premiumFilter), 0); }
+  function qPremiumAll(q) { return q.groups.reduce((s, g) => s + getGroupPremium(g, "all"), 0); }
+
+  const totalMedical = quarters.reduce((s, q) => s + qPremiumAll(q), 0);
+  const totalCommission = totalMedical * COMMISSION_RATE;
+
+  const carrierData = current ? (() => {
+    const map = {};
+    current.groups.forEach(g => {
+      const c1 = (g["Medical Carrier"] || "").trim();
+      const c2 = (g["2nd Medical Carrier"] || "").trim();
+      const m1 = parseFloat(g["Medical $"]) || 0;
+      const m2 = parseFloat(g["2nd Medical $"]) || 0;
+      const inc1 = premiumFilter === "all" || (premiumFilter === "kaiser" && isKaiser(c1)) || (premiumFilter === "nonkaiser" && !isKaiser(c1));
+      const inc2 = premiumFilter === "all" || (premiumFilter === "kaiser" && isKaiser(c2)) || (premiumFilter === "nonkaiser" && !isKaiser(c2));
+      if (c1 && inc1 && m1 > 0) map[c1] = (map[c1] || 0) + m1;
+      if (c2 && inc2 && m2 > 0) map[c2] = (map[c2] || 0) + m2;
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]).map(([k, v]) => ({ label: k, value: v }));
+  })() : [];
+
+  const commissionByType = current ? (() => {
+    const kaiser = current.groups.reduce((s, g) => s + getGroupPremium(g, "kaiser"), 0) * COMMISSION_RATE;
+    const nonKaiser = current.groups.reduce((s, g) => s + getGroupPremium(g, "nonkaiser"), 0) * COMMISSION_RATE;
+    return [{ label: "Kaiser", value: kaiser, color: "#7F77DD" }, { label: "Non-Kaiser", value: nonKaiser, color: "#1D9E75" }];
+  })() : [];
+
+  const qtrCommissions = quarters.map((q, i) => ({
+    label: q.label,
+    value: qPremiumAll(q) * COMMISSION_RATE,
+    color: QTR_COLORS[i % QTR_COLORS.length]
+  }));
+
+  function renderQuarterKPIs() {
+    if (!current) return null;
+    const eligible = current.groups.filter(g => getRenewalPremium(g, premiumFilter) !== null);
+    const eligibleBot = current.groups.filter(g => getLowestRenewalPremium(g, premiumFilter) !== null);
+    const top = eligible.length > 0 ? eligible.reduce((b, g) => getRenewalPremium(g, premiumFilter) > getRenewalPremium(b, premiumFilter) ? g : b, eligible[0]) : null;
+    const bot = eligibleBot.length > 0 ? eligibleBot.reduce((w, g) => getLowestRenewalPremium(g, premiumFilter) < getLowestRenewalPremium(w, premiumFilter) ? g : w, eligibleBot[0]) : null;
+    const topName = top ? (top["Group Name (Group Name)"] || top["Group Name"] || "—") : "—";
+    const topPct = top ? getGroupPct(top, premiumFilter, "highest") : 0;
+    const topPremium = top ? getRenewalPremium(top, premiumFilter) : 0;
+    const botName = bot ? (bot["Group Name (Group Name)"] || bot["Group Name"] || "—") : "—";
+    const botPct = bot ? getGroupPct(bot, premiumFilter, "lowest") : 0;
+    const botPremium = bot ? getLowestRenewalPremium(bot, premiumFilter) : 0;
+    const livesTotal = current.groups.reduce((s, g) => {
+      const c1 = (g["Medical Carrier"] || "").trim();
+      const c2 = (g["2nd Medical Carrier"] || "").trim();
+      const ch1 = parseFloat(g["Medical Employee Change"]) || 0;
+      const ch2 = parseFloat(g["Medical 2 Employee Change"]) || 0;
+      const inc1 = premiumFilter === "all" || (premiumFilter === "kaiser" && isKaiser(c1)) || (premiumFilter === "nonkaiser" && !isKaiser(c1));
+      const inc2 = premiumFilter === "all" || (premiumFilter === "kaiser" && isKaiser(c2)) || (premiumFilter === "nonkaiser" && !isKaiser(c2));
+      return s + (inc1 ? ch1 : 0) + (inc2 ? ch2 : 0);
+    }, 0);
+    const n = Math.round(livesTotal);
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: "1.25rem" }}>
+        <KPICard label="Quarter commission" value={fmt$(qPremium(current) * COMMISSION_RATE)} />
+        <KPICard label="Medical premium" value={fmtShort(qPremium(current))} sub={premiumFilter === "kaiser" ? "Kaiser only" : premiumFilter === "nonkaiser" ? "Non-Kaiser only" : null} />
+        <KPICard label="Highest renewal group" value={topName} premium={topPremium} pct={topPct} small={true} />
+        <KPICard label="Lowest renewal group" value={botName} premium={botPremium} pct={botPct} small={true} />
+        <KPICard label="Total quarter change in lives" value={(n > 0 ? "+" : "") + n.toLocaleString()} />
+      </div>
+    );
+  }
+
+  function renderPieChart() {
+    if (!commissionByType.length) return <div style={{ color: "#aaa", fontSize: 13 }}>No data</div>;
+    const total = commissionByType.reduce((s, d) => s + d.value, 0);
+    const size = 110, cx = size/2, cy = size/2, r = size*0.36, stroke = size*0.22;
+    let angle = -90;
+    const slices = commissionByType.map(d => {
+      const sweep = total > 0 ? (d.value / total) * 360 : 0;
+      const start = angle; angle += sweep;
+      const a1 = start * Math.PI / 180, a2 = (start + sweep) * Math.PI / 180;
+      const x1 = cx + r*Math.cos(a1), y1 = cy + r*Math.sin(a1);
+      const x2 = cx + r*Math.cos(a2), y2 = cy + r*Math.sin(a2);
+      return { ...d, path: `M ${x1} ${y1} A ${r} ${r} 0 ${sweep > 180 ? 1 : 0} 1 ${x2} ${y2}`, sweep };
+    });
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+        <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+          <circle cx={cx} cy={cy} r={r} fill="none" stroke="#f3f3f3" strokeWidth={stroke} />
+          {slices.map((s, i) => s.sweep > 0 && <path key={i} d={s.path} fill="none" stroke={s.color} strokeWidth={stroke} strokeLinecap="butt" />)}
+        </svg>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
+          {commissionByType.map((d, i) => (
+            <div key={i}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginBottom: 2 }}>
+                <div style={{ width: 8, height: 8, borderRadius: 2, background: d.color, flexShrink: 0 }} />
+                <span style={{ color: "#666" }}>{d.label}</span>
+                <span style={{ marginLeft: "auto", color: "#aaa", fontSize: 11 }}>{total > 0 ? ((d.value/total)*100).toFixed(1)+"%" : "—"}</span>
+              </div>
+              <div style={{ fontSize: 14, fontWeight: 500, paddingLeft: 14 }}>{fmt$(d.value)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ fontSize: 20 }}
+      onDragOver={e => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={e => { e.preventDefault(); setDragging(false); const f = e.dataTransfer.files[0]; if (f) handleFile(f); }}
+    >
+      {dragging && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(127,119,221,0.15)", border: "3px dashed #7F77DD", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, color: "#7F77DD", fontWeight: 700, pointerEvents: "none" }}>
+          Drop your Excel file to load
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "1.5rem", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#666", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Executive dashboard</div>
+          <h1 style={{ fontSize: 22, fontWeight: 500, margin: 0 }}>Renewals & commission tracker</h1>
+          <div style={{ fontSize: 13, color: "#666", marginTop: 4 }}>Medical commissions at 5% · Annual accrual</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <Toggle value={premiumFilter} onChange={setPremiumFilter} />
+          {APPS_SCRIPT_URL && (
+            <button onClick={fetchFromAppsScript} style={{ padding: "7px 14px", fontSize: 13, border: "1px solid #ddd", borderRadius: 8, background: "#fff", cursor: "pointer", fontWeight: 700 }}>
+              ↻ Refresh
+            </button>
+          )}
+          <button onClick={() => fileRef.current.click()} style={{ padding: "7px 16px", fontSize: 13, background: "#7F77DD", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 700 }}>
+            ↑ Upload Excel
+          </button>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => { if (e.target.files[0]) handleFile(e.target.files[0]); }} />
+        </div>
+      </div>
+
+      {loading && <div style={{ textAlign: "center", padding: "4rem", color: "#666" }}>Loading from Google Sheets…</div>}
+      {error && <div style={{ background: "#fff3f0", border: "1px solid #fcc", borderRadius: 8, padding: "1rem", marginBottom: "1rem", fontSize: 13, color: "#c00" }}>{error}</div>}
+
+      {quarters.length === 0 && !loading ? (
+        <div onClick={() => fileRef.current.click()} style={{ textAlign: "center", padding: "4rem 2rem", color: "#666", border: "2px dashed #ddd", borderRadius: 12, cursor: "pointer" }}>
+          <div style={{ fontSize: 40, marginBottom: 12, opacity: 0.3 }}>📊</div>
+          <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 16 }}>Upload your Excel renewals file</div>
+          <div style={{ fontSize: 13 }}>Each sheet tab = one quarter · Click or drag & drop</div>
+        </div>
+      ) : !loading && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: "1.5rem" }}>
+            {[
+              { label: "Annual commissions", value: fmt$(totalCommission), accent: "#7F77DD", sub: `${quarters.length} quarter${quarters.length !== 1 ? "s" : ""}` },
+              { label: "Total medical premium", value: fmtShort(totalMedical), sub: premiumFilter === "kaiser" ? "Kaiser only" : premiumFilter === "nonkaiser" ? "Non-Kaiser only" : "all carriers" },
+              { label: "Total groups renewed", value: quarters.reduce((s, q) => s + q.groups.length, 0).toLocaleString(), sub: "with medical" },
+              { label: "Total change in lives", value: (() => { const n = Math.round(quarters.reduce((s, q) => s + q.groups.reduce((qs, g) => { const c1 = (g["Medical Carrier"] || "").trim(); const c2 = (g["2nd Medical Carrier"] || "").trim(); const ch1 = parseFloat(g["Medical Employee Change"]) || 0; const ch2 = parseFloat(g["Medical 2 Employee Change"]) || 0; const inc1 = premiumFilter === "all" || (premiumFilter === "kaiser" && isKaiser(c1)) || (premiumFilter === "nonkaiser" && !isKaiser(c1)); const inc2 = premiumFilter === "all" || (premiumFilter === "kaiser" && isKaiser(c2)) || (premiumFilter === "nonkaiser" && !isKaiser(c2)); return qs + (inc1 ? ch1 : 0) + (inc2 ? ch2 : 0); }, 0), 0)); return (n > 0 ? "+" : "") + n.toLocaleString(); })(), sub: "all quarters" },
+            ].map((c, i) => (
+              <div key={i} style={{ background: "#f3f3f3", borderRadius: 10, padding: "1rem" }}>
+                <div style={{ fontSize: 12, color: "#666", marginBottom: 6, fontWeight: 500 }}>{c.label}</div>
+                <div style={{ fontSize: 22, fontWeight: 500, color: c.accent || "#111" }}>{c.value}</div>
+                <div style={{ fontSize: 12, color: "#666", marginTop: 2 }}>{c.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: 6, marginBottom: "1.25rem", flexWrap: "wrap" }}>
+            {quarters.map((q, i) => (
+              <button key={q.label} onClick={() => setActiveQ(q.label)} style={{ fontSize: 13, padding: "5px 14px", borderRadius: 20, border: activeQ === q.label ? `2px solid ${QTR_COLORS[i % QTR_COLORS.length]}` : "1px solid #ddd", background: activeQ === q.label ? "#fff" : "transparent", color: activeQ === q.label ? QTR_COLORS[i % QTR_COLORS.length] : "#666", cursor: "pointer", fontWeight: activeQ === q.label ? 700 : 400 }}>{q.label}</button>
+            ))}
+          </div>
+
+          {current && (
+            <>
+              {renderQuarterKPIs()}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                <div style={{ background: "#fff", border: "1px solid #eee", borderRadius: 12, padding: "1rem 1.25rem" }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 12, color: "#666" }}>Commission by quarter</div>
+                  <BarChart data={qtrCommissions} color="#7F77DD" />
+                  <div style={{ marginTop: 12, borderTop: "1px solid #eee", paddingTop: 10, display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                    <span style={{ color: "#666" }}>Annual total</span>
+                    <span style={{ fontWeight: 500, color: "#7F77DD" }}>{fmt$(totalCommission)}</span>
+                  </div>
+                </div>
+                <div style={{ background: "#fff", border: "1px solid #eee", borderRadius: 12, padding: "1rem 1.25rem" }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 12, color: "#666" }}>Commission per carrier</div>
+                  {renderPieChart()}
+                </div>
+              </div>
+              <div style={{ marginBottom: 12, background: "#fff", border: "1px solid #eee", borderRadius: 12, padding: "1rem 1.25rem" }}>
+                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 12, color: "#666" }}>
+                  Medical premium by carrier{premiumFilter !== "all" && <span style={{ marginLeft: 6, fontWeight: 400, color: "#7F77DD" }}>· {premiumFilter === "kaiser" ? "Kaiser only" : "Non-Kaiser only"}</span>}
+                </div>
+                {carrierData.length > 0 ? <BarChart data={carrierData} color="#D85A30" /> : <div style={{ color: "#aaa", fontSize: 13 }}>No data</div>}
+              </div>
+              <div style={{ background: "#fff", border: "1px solid #eee", borderRadius: 12, padding: "1rem 1.25rem" }}>
+                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 12, color: "#666" }}>Group detail — {current.label}</div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "fixed" }}>
+                    <colgroup>
+                      <col style={{ width: "22%" }} /><col style={{ width: "13%" }} /><col style={{ width: "12%" }} />
+                      <col style={{ width: "12%" }} /><col style={{ width: "12%" }} /><col style={{ width: "11%" }} />
+                      <col style={{ width: "18%" }} />
+                    </colgroup>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #ddd" }}>
+                        {["Group","Renewal month","Medical $","2nd Medical $","Commission","Employees","Account manager"].map(h => (
+                          <th key={h} style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600, color: "#666", fontSize: 12, whiteSpace: "nowrap" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {current.groups.sort((a, b) => getGroupPremium(b, premiumFilter) - getGroupPremium(a, premiumFilter)).map((g, i) => {
+                        const med = parseFloat(g["Medical $"]) || 0;
+                        const med2 = parseFloat(g["2nd Medical $"]) || 0;
+                        const comm = getGroupPremium(g, premiumFilter) * COMMISSION_RATE;
+                        const k1 = isKaiser(g["Medical Carrier"]);
+                        const k2 = isKaiser(g["2nd Medical Carrier"]);
+                        const dim1 = premiumFilter === "kaiser" ? !k1 : premiumFilter === "nonkaiser" ? k1 : false;
+                        const dim2 = premiumFilter === "kaiser" ? !k2 : premiumFilter === "nonkaiser" ? k2 : false;
+                        return (
+                          <tr key={i} style={{ borderBottom: "1px solid #f0f0f0", background: i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                            <td style={{ padding: "6px 8px", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g["Group Name (Group Name)"] || g["Group Name"] || "—"}</td>
+                            <td style={{ padding: "6px 8px", color: "#666" }}>{fmtDate(g["OVERALL Renewal MONTH"])}</td>
+                            <td style={{ padding: "6px 8px", color: dim1 ? "#ccc" : "#111" }}>{med !== 0 ? fmt$(med) : "—"}</td>
+                            <td style={{ padding: "6px 8px", color: dim2 ? "#ccc" : "#111" }}>{med2 !== 0 ? fmt$(med2) : "—"}</td>
+                            <td style={{ padding: "6px 8px", color: "#7F77DD", fontWeight: 500 }}>{fmt$(comm)}</td>
+                            <td style={{ padding: "6px 8px", color: "#666" }}>{Math.round(parseFloat(g["Medical Employee Count"]) || 0)}</td>
+                            <td style={{ padding: "6px 8px", color: "#666", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g["Account Manager"] || "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
