@@ -1,6 +1,0 @@
-name = "quarterly-renewals"
-compatibility_date = "2026-07-01"
-# trigger test: confirming push-to-deploy webhook fires
-
-[assets]
-directory = "."
